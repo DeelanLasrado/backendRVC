@@ -1,37 +1,19 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
-from .models import User, Question, Answer, TestAttempt, db
+from .models import User, Question, Answer, Test, TestAttempt, db
 from werkzeug.security import generate_password_hash, check_password_hash
 from .utils import grade_answer
-
-
 
 main = Blueprint('main', __name__)
 
 @main.route('/register', methods=['POST'])
 def register():
-    try:
-        print("Attempting to register a user...")
-        data = request.get_json()
-        print("Data received:", data)
-
-        if not data:
-            return jsonify({'message': 'No input data provided'}), 400
-
-        hashed_password = generate_password_hash(data['password'])
-        print("Password hashed.")
-
-        new_user = User(username=data['username'], password=hashed_password, is_lecturer=data.get('is_lecturer', False))
-        
-        db.session.add(new_user)
-        db.session.commit()
-
-        return jsonify({'message': 'User registered successfully'})
-    except Exception as e:
-        print(f"Error: {e}")
-        return jsonify({'message': 'Internal Server Error'}), 500
-
-
+    data = request.get_json()
+    hashed_password = generate_password_hash(data['password'])
+    new_user = User(username=data['username'], password=hashed_password, is_lecturer=data.get('is_lecturer', False))
+    db.session.add(new_user)
+    db.session.commit()
+    return jsonify({'message': 'User registered successfully'})
 
 @main.route('/login', methods=['POST'])
 def login():
@@ -42,6 +24,20 @@ def login():
         return jsonify({'access_token': access_token})
     return jsonify({'message': 'Invalid credentials'}), 401
 
+@main.route('/create_test', methods=['POST'])
+@jwt_required()
+def create_test():
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    if not user.is_lecturer:
+        return jsonify({'message': 'Permission denied'}), 403
+
+    data = request.get_json()
+    new_test = Test(test_name=data['test_name'], lecturer_id=current_user)
+    db.session.add(new_test)
+    db.session.commit()
+    return jsonify({'message': 'Test created successfully'})
+
 @main.route('/add_question', methods=['POST'])
 @jwt_required()
 def add_question():
@@ -50,22 +46,31 @@ def add_question():
     if not user.is_lecturer:
         return jsonify({'message': 'Permission denied'}), 403
 
-    data = request.get_json()
-    new_question = Question(question_text=data['question_text'], answer_key=data['answer_key'], lecturer_id=current_user)
+    data = request.get_json()        
+    new_question = Question(question_text=data['question_text'], answer_key=data['answer_key'], lecturer_id=current_user, test_id=data['test_id'])
     db.session.add(new_question)
     db.session.commit()
     return jsonify({'message': 'Question added successfully'})
 
-@main.route('/questions', methods=['GET'])
+@main.route('/tests', methods=['GET'])
 @jwt_required()
-def get_questions():
-    current_user = get_jwt_identity()
-    user = User.query.get(current_user)
-    if user.is_lecturer:
-        questions = Question.query.filter_by(lecturer_id=current_user).all()
-    else:
-        questions = Question.query.all()
+def get_tests():
+    tests = Test.query.all()
+    output = []
+    for test in tests:
+        test_data = {
+            'id': test.id,
+            'test_name': test.test_name,
+            'questions': [{'id': q.id, 'question_text': q.question_text} for q in test.questions]
+        }
+        output.append(test_data)
     
+    return jsonify({'tests': output})
+
+@main.route('/questions/<int:test_id>', methods=['GET'])
+@jwt_required()
+def get_questions(test_id):
+    questions = Question.query.filter_by(test_id=test_id).all()
     output = []
     for question in questions:
         question_data = {
@@ -82,7 +87,6 @@ def submit_answer():
     current_user = get_jwt_identity()
     data = request.get_json()
     question = Question.query.get(data['question_id'])
-    print(question)
     if not question:
         return jsonify({'message': 'Question not found'}), 404
 
